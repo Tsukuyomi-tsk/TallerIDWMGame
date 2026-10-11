@@ -99,3 +99,9 @@ def get_game(slug: str, session: SessionDep) -> GameDetail:
         rating_average=detail.rating_average,
         rating_count=detail.rating_count,
     )
+
+
+@router.get("/categories", response_model=list[CategoryRead])
+def list_categories(session: SessionDep) -> list[CategoryRead]:
+    categories = catalog_service.list_categories(session)
+    return [CategoryRead.model_validate(category) for category in categories]

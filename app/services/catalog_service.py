@@ -16,6 +16,8 @@ from sqlmodel import Session
 
 from app.core.exceptions import NotFoundError
 from app.core.time import utcnow
+from app.models import Category
+from app.repositories.category_repository import CategoryRepository
 from app.repositories.game_repository import GameDetailRow, GameRepository, GameSummaryRow
 from app.schemas.game import GameSort
 
@@ -60,3 +62,7 @@ def get_game_detail(session: Session, *, slug: str) -> GameDetailRow:
     if detail is None:
         raise NotFoundError("Juego no encontrado.")
     return detail
+
+
+def list_categories(session: Session) -> list[Category]:
+    return CategoryRepository(session).list_all()

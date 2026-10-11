@@ -1,3 +1,5 @@
+"""Pydantic schema for Category — the public catalog's read-only shape."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
