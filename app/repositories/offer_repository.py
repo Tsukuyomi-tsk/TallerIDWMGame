@@ -13,9 +13,11 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
+from sqlalchemy import update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, select
 
+from app.models.game import Game
 from app.models.offer import Offer
 from app.repositories.base import BaseRepository
 
@@ -61,6 +63,26 @@ class OfferRepository(BaseRepository[Offer]):
         if game_id is not None:
             statement = statement.where(Offer.game_id == game_id)
         return list(self.session.exec(statement).all())
+
+    def lock_game_offers(self, game_id: int) -> None:
+        """Serializes admin writes on one game's offers — a transaction
+        boundary lock, not a data change.
+
+        "No two active offers may overlap" spans several rows, so no DB
+        constraint can enforce it: the service's check-then-insert is the
+        only defence, and two concurrent requests would both pass the
+        check before either commits. A no-op UPDATE on the game row takes
+        the write lock; the second request waits here until the first
+        commits, so its overlap check then sees the first one's offer.
+        """
+        # UPDATE que no cambia nada (id = id): lo que importa es que escribir
+        # obliga a la base a tomar el candado de escritura.
+        # En SQLite el primero que escribe bloquea y los demás esperan su commit.
+        self.session.execute(
+            update(Game).where(Game.id == game_id).values(id=Game.id),
+            # No hay objetos en memoria que sincronizar: nada cambió de verdad.
+            execution_options={"synchronize_session": False},
+        )
 
     def list_overlapping_active(
         self,

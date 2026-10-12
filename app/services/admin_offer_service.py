@@ -45,6 +45,9 @@ def create_offer(session: Session, *, payload: OfferCreate) -> Offer:
     if games.get(payload.game_id) is None:
         raise NotFoundError("Juego no encontrado.")
 
+    # Candado sobre el juego: si otra petición está creando una oferta para él,
+    # esperamos a que haga commit y recién entonces revisamos el solapamiento.
+    offers.lock_game_offers(payload.game_id)
     _check_no_overlap(
         offers,
         game_id=payload.game_id,
@@ -70,6 +73,15 @@ def create_offer(session: Session, *, payload: OfferCreate) -> Offer:
 # app/services/admin_offer_service.py (continúa)
 def update_offer(session: Session, *, offer_id: int, payload: OfferUpdate) -> Offer:
     offers = OfferRepository(session)
+    offer = offers.get(offer_id)
+    if offer is None:
+        raise NotFoundError("Oferta no encontrada.")
+
+    # Mismo candado que al crear: serializa las escrituras sobre las ofertas del juego.
+    offers.lock_game_offers(offer.game_id)
+    # Mientras esperábamos el candado, otra petición pudo modificar o borrar esta
+    # oferta: se descarta lo que la sesión tenía en memoria y se vuelve a leer.
+    session.expire(offer)
     offer = offers.get(offer_id)
     if offer is None:
         raise NotFoundError("Oferta no encontrada.")

@@ -24,6 +24,7 @@ import secrets
 from datetime import timedelta
 
 import jwt
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.core.config import settings
@@ -92,7 +93,17 @@ def register(session: Session, *, email: str, password: str, full_name: str) -> 
     if users.get_by_email(email) is not None:
         raise ConflictError("Ya existe una cuenta con este correo.")
 
-    user = users.add(User(email=email, password_hash=hash_password(password), full_name=full_name))
+    # Entre la revisión de arriba y el INSERT otra petición pudo registrar el mismo
+    # correo: el índice UNIQUE de users.email arbitra y esta pierde con IntegrityError.
+    # add() hace flush, así que el error salta aquí y no en el commit.
+    try:
+        user = users.add(
+            User(email=email, password_hash=hash_password(password), full_name=full_name)
+        )
+    except IntegrityError:
+        # Se deshace la transacción fallida y se responde igual que el duplicado secuencial.
+        session.rollback()
+        raise ConflictError("Ya existe una cuenta con este correo.") from None
     _issue_verification_code(session, user)
     session.commit()
     session.refresh(user)
@@ -196,11 +207,16 @@ def logout(session: Session, *, token: str) -> None:
     if blacklist.is_revoked(jti):
         return
 
-    blacklist.add(
-        TokenBlacklist(
-            jti=jti,
-            user_id=int(payload["sub"]),
-            expires_at=token_expiry_from_claims(payload),
+    try:
+        blacklist.add(
+            TokenBlacklist(
+                jti=jti,
+                user_id=int(payload["sub"]),
+                expires_at=token_expiry_from_claims(payload),
+            )
         )
-    )
-    session.commit()
+        session.commit()
+    except IntegrityError:
+        # Otro logout con el mismo token revocó el jti primero (jti es UNIQUE): el
+        # objetivo ya está cumplido, así que sigue siendo un no-op silencioso.
+        session.rollback()

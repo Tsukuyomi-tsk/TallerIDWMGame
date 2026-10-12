@@ -1,6 +1,7 @@
 # app/services/admin_game_service.py
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.core.exceptions import NotFoundError, ValidationError
@@ -51,20 +52,34 @@ def create_game(session: Session, *, payload: GameCreate) -> GameAdminRow:
         raise ValidationError("Ya existe un juego con ese slug.")
     _validate_category_ids(categories, payload.category_ids)
 
-    game = games.add(
-        Game(
-            title=payload.title,
-            slug=payload.slug,
-            description=payload.description,
-            developer=payload.developer,
-            publisher=payload.publisher,
-            platform=payload.platform,
-            release_date=payload.release_date,
-            base_price=payload.base_price,
+    # Entre la revisión del slug y el commit otra petición pudo crear el mismo
+    # slug: la restricción única de la base nos frena con un IntegrityError.
+    # El try envuelve desde games.add() (que ya hace flush y puede disparar el
+    # error) hasta el commit, no solo el commit.
+    try:
+        game = games.add(
+            Game(
+                title=payload.title,
+                slug=payload.slug,
+                description=payload.description,
+                developer=payload.developer,
+                publisher=payload.publisher,
+                platform=payload.platform,
+                release_date=payload.release_date,
+                base_price=payload.base_price,
+            )
         )
-    )
-    games.set_categories(game.id, payload.category_ids)
-    session.commit()
+        games.set_categories(game.id, payload.category_ids)
+        session.commit()
+    except IntegrityError:
+        # Se deshace la transacción fallida.
+        session.rollback()
+        # Si la causa es el slug, ahora la otra fila es visible: se responde el
+        # mismo 422 de la revisión previa. `from None` deja solo el error limpio.
+        if games.get_by_slug(payload.slug, include_deleted=True) is not None:
+            raise ValidationError("Ya existe un juego con ese slug.") from None
+        # Si fue por otra causa, no se esconde.
+        raise
     session.refresh(game)
     return games.load_admin_row(game)
 
@@ -89,11 +104,22 @@ def update_game(session: Session, *, game_id: int, payload: GameUpdate) -> GameA
     for field, value in data.items():
         setattr(game, field, value)
 
-    games.add(game)
-    if category_ids is not None:
-        _validate_category_ids(categories, category_ids)
-        games.set_categories(game.id, category_ids)
-    session.commit()
+    # Se guarda ahora: tras un rollback el objeto queda expirado.
+    new_slug = data.get("slug")
+    try:
+        games.add(game)
+        if category_ids is not None:
+            _validate_category_ids(categories, category_ids)
+            games.set_categories(game.id, category_ids)
+        session.commit()
+    except IntegrityError:
+        # Otra petición nos ganó el slug entre la revisión y el commit.
+        session.rollback()
+        taken = games.get_by_slug(new_slug, include_deleted=True) if new_slug else None
+        # Solo cuenta si el slug lo tiene OTRO juego (no este mismo).
+        if taken is not None and taken.id != game_id:
+            raise ValidationError("Ya existe un juego con ese slug.") from None
+        raise
     session.refresh(game)
     return games.load_admin_row(game)
 
