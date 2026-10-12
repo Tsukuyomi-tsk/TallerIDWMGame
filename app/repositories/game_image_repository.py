@@ -1,0 +1,28 @@
+# app/repositories/game_image_repository.py
+from __future__ import annotations
+
+from sqlmodel import select
+
+from app.models import GameImage
+from app.repositories.base import BaseRepository
+
+
+# app/repositories/game_image_repository.py (continúa)
+class GameImageRepository(BaseRepository[GameImage]):
+    model = GameImage
+
+    def list_for_game(self, game_id: int) -> list[GameImage]:
+        statement = (
+            select(GameImage)
+            .where(GameImage.game_id == game_id)
+            .order_by(GameImage.is_cover.desc(), GameImage.sort_order.asc())
+        )
+        return list(self.session.exec(statement).all())
+
+    def clear_cover(self, game_id: int) -> None:
+        images = self.list_for_game(game_id)
+        for image in images:
+            if image.is_cover:
+                image.is_cover = False
+                self.session.add(image)
+        self.session.flush()

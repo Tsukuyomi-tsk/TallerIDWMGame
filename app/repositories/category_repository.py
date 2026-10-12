@@ -19,3 +19,38 @@ class CategoryRepository(BaseRepository[Category]):
         """
         statement = select(Category).where(Category.deleted_at.is_(None)).order_by(Category.name)
         return list(self.session.exec(statement).all())
+
+    def list_all_admin(self) -> list[Category]:
+        """Every category, deleted ones included — the backoffice needs to
+        see what it can restore, not just what's currently public.
+        """
+        # Sin filtro de deleted_at: el admin también ve las borradas para restaurarlas.
+        statement = select(Category).order_by(Category.name)
+        return list(self.session.exec(statement).all())
+
+    def get_by_slug(self, slug: str, *, include_deleted: bool = False) -> Category | None:
+        # Busca por slug exacto; por defecto ignora las categorías borradas.
+        statement = select(Category).where(Category.slug == slug)
+        if not include_deleted:
+            statement = statement.where(Category.deleted_at.is_(None))
+        return self.session.exec(statement).first()
+
+    def get_by_name(self, name: str, *, include_deleted: bool = False) -> Category | None:
+        # Igual que get_by_slug pero por nombre, para impedir nombres repetidos.
+        statement = select(Category).where(Category.name == name)
+        if not include_deleted:
+            statement = statement.where(Category.deleted_at.is_(None))
+        return self.session.exec(statement).first()
+
+    def get_many(self, category_ids: list[int]) -> list[Category]:
+        """Non-deleted categories among the given ids — used to validate a
+        game's `category_ids` before linking them.
+        """
+        # Lista vacía: evita ejecutar un IN () sin elementos.
+        if not category_ids:
+            return []
+        # Solo categorías vigentes; el servicio compara contra los ids pedidos.
+        statement = select(Category).where(
+            Category.id.in_(category_ids), Category.deleted_at.is_(None)
+        )
+        return list(self.session.exec(statement).all())

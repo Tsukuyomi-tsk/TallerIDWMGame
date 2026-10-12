@@ -17,6 +17,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, select
 
 from app.models.offer import Offer
+from app.repositories.base import BaseRepository
 
 
 def active_offer_clause(now: datetime) -> ColumnElement[bool]:
@@ -48,3 +49,33 @@ def compute_effective_price(base_price: Decimal, offer: Offer | None) -> tuple[D
     discount = (base_price * offer.discount_percent) / Decimal(100)
     final_price = (base_price - discount).quantize(Decimal("0.01"))
     return final_price, offer.discount_percent
+
+
+# app/repositories/offer_repository.py
+class OfferRepository(BaseRepository[Offer]):
+    model = Offer
+
+    # app/repositories/offer_repository.py
+    def list_all(self, *, game_id: int | None = None) -> list[Offer]:
+        statement = select(Offer).order_by(Offer.starts_at.desc())
+        if game_id is not None:
+            statement = statement.where(Offer.game_id == game_id)
+        return list(self.session.exec(statement).all())
+
+    def list_overlapping_active(
+        self,
+        *,
+        game_id: int,
+        starts_at: datetime,
+        ends_at: datetime,
+        exclude_offer_id: int | None = None,
+    ) -> list[Offer]:
+        statement = select(Offer).where(
+            Offer.game_id == game_id,
+            Offer.is_active.is_(True),
+            Offer.starts_at <= ends_at,
+            Offer.ends_at >= starts_at,
+        )
+        if exclude_offer_id is not None:
+            statement = statement.where(Offer.id != exclude_offer_id)
+        return list(self.session.exec(statement).all())
